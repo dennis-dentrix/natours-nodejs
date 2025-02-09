@@ -13,6 +13,28 @@ const signToken = (id) => {
   });
 };
 
+const createSendToken = (user, statusCode, res) => {
+  const token = signToken(user._id);
+
+  const cookieOptions = {
+    httpOnly: true,
+    expires: new Date(Date.now() + process.env.JWT_COOKIE_EXPIRES_IN *24 * 60 * 60 * 1000)
+  }
+
+  if(process.env.NODE_ENV === "production" ) cookieOptions.secure = true
+
+  res.cookie('jwt', token, cookieOptions)
+
+  user.password = undefined
+  res.status(statusCode).json({
+    status: 'Success',
+    token,
+    data: {
+      user
+    }
+  });
+}
+
 exports.signup = catchAsync(async (req, res, next) => {
   const newUser = await User.create({
     name: req.body.name,
@@ -23,15 +45,9 @@ exports.signup = catchAsync(async (req, res, next) => {
     // passwordChangedAt: req.body.passwordChangedAt,
   });
 
-  const token = signToken(newUser._id);
+  createSendToken(newUser, 200, res)
 
-  res.status(200).json({
-    status: 'success',
-    token,
-    data: {
-      user: newUser,
-    },
-  });
+  
 });
 
 exports.login = catchAsync(async (req, res, next) => {
@@ -49,12 +65,7 @@ exports.login = catchAsync(async (req, res, next) => {
     return next(new AppError('Incorrect email or password.', 401));
   }
 
-  const token = signToken(user._id);
-
-  res.status(200).json({
-    status: 'Success',
-    token,
-  });
+  createSendToken(user, 201, res)
 });
 
 exports.protect = catchAsync(async (req, res, next) => {
@@ -86,11 +97,11 @@ exports.protect = catchAsync(async (req, res, next) => {
   const freshUser = await User.findById(decoded.id);
   if (!freshUser) {
     return next(
-      new AppError('The user belonging to the token does not exist!.')
+      new AppError('The user belonging to the token does not exist!.', 401)
     );
   }
 
-  // CHHECK IF PASSWAORD HAS BEEN CHANGED AFTER LOGIN
+  // CHECK IF PASSWORD HAS BEEN CHANGED AFTER LOGIN
   if (freshUser.changedPasswordAt(decoded.iat)) {
     return next(
       new AppError('The password was recently changed. Please login again', 401)
@@ -188,3 +199,23 @@ exports.resetPassword = catchAsync(async (req, res, next) => {
     
   });
 });
+
+exports.updatePassword = catchAsync(async(req, res, next) => {
+  // GET THE USER
+  const user = await User.findById(req.user.id).select("+password");
+
+  // CHECK IF POSTed Current password is correct
+  if(!(await user.correctPassword(req.body.passwordCurrent, user.password))){
+    return next(new AppError("Wrong passowrd! Try again.", 401));
+  }
+
+  // update the passowrd
+  user.password = req.body.password;
+  user.passwordConfirm = req.body.passwordConfirm;
+
+  await user.save()
+
+  // login the user again
+  createSendToken(200, user, res)
+  
+})
